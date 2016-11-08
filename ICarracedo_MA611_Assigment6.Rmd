@@ -1,0 +1,322 @@
+---
+title: "MA611 Assignment 6"
+author: "Ignacio Carracedo"
+date: "November 5th, 2016"
+output: html_document
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(FinTS)
+library(fGarch)
+library(forecast)
+setwd('C:\\Users\\carrai1\\Desktop\\Master\\MA611_Time_Series\\Assigments\\6\\')
+load('data.RData')
+#str(data)
+#class(data)
+#plot(data)
+```
+
+
+**1.a. Find the best ARMA model for the series. Be sure to justify your choice of model and confirm all assumptions. **
+
+First, we plot the data:
+
+```{r, echo=FALSE}
+plot(data,main="Data")
+```
+
+Inspecting the plot visually it seems that the series has a volatility cluster at the beginning where there is a higher variance. Variance seems to remain constant the rest of the series.
+
+We are going to fit the linear component of the model using an ARMA(p,q) model:
+
+x(t) = alpha0 + alpha1 x(t-1) + ... + alphap x(t-p) + beta1 a(t-1) + ... + betaq a(t-q) + at
+
+Let's first check if the mean of the series is 0 to see if we need the constant alpha0. We'll test null hypothesis mean=0:
+
+```{r, echo=FALSE,warning=FALSE, message=FALSE}
+FinTS.stats(data)
+z = mean(data)/sqrt(var(data)/length(data))
+pnorm(z, lower.tail = FALSE)
+```
+
+p-value (`0.8451606`) for mean = 0 is much higher than the significant level (5%) so we don't reject the null hypothesis and conclude that the mean is 0, thus, we won't need a constant for our ARMA(p,q) model:
+
+x(t) = alpha1 x(t-1) + ... + alphap x(t-p) + beta1 a(t-1) + ... + betaq a(t-q) + at
+
+Now, we check auto correlation and partial auto correlation plots to get a sense of that the parameters 'p' and 'q' might be:
+
+```{r, echo=FALSE,warning=FALSE, message=FALSE}
+Acf(data)
+pacf(data)
+```
+
+`Acf` and `pacf` are difficult to interpret, `Acf` seems to be decaying (having significant lags at 3 and 4) and `pacf` seems to cut off after 2nd lag but there are other lags close to significance level. To check what ARMA(p,q) model works best we can use the function `auto.arima` and compare models using AIC (which penalizes complexity of the model):
+
+```{r, echo=FALSE,warning=FALSE, message=FALSE}
+auto.arima(data, max.p = 4, max.q = 4, stationary=TRUE, trace=TRUE, ic='aic', stepwise=FALSE)
+```
+
+ARMA(p=3,q=2) has the best AIC value, let's fit the model:
+
+```{r, echo=FALSE}
+arima(x = data, order = c(3, 0, 2), fixed = c(NA, NA, NA, NA, NA),include.mean = FALSE)   
+```
+
+As we can see ar2 is not significant so we'll fit the model again removing this coefficient:
+
+```{r, echo=FALSE}
+model = arima(x = data, order = c(3, 0, 2), fixed = c(NA, 0, NA, NA, NA),include.mean = FALSE)   
+model
+```
+
+Now, all coefficients are significant and this model has the best AIC. The model is:
+
+x(t) = -0.5711 x(t-1) + 0.3739 x(t-3) + 1.0961 a(t-1) + 0.6984 a(t-2) + at
+
+Let's check the diagnostic plots of our model:
+
+```{r, echo=FALSE}
+tsdiag(model)
+```
+
+The residuals seem to have no correlation as we can see in the p-values plot for Ljung-Box test. But the variance is higher at the beginning of the series while it remains approximately constant for the rest indicating that there is a high volatility cluster at the beginning of the series (conditional heteroscedasticity).
+
+**1.b. Use the residuals from the model to test for conditional heteroscedasticity (test at 6 and 12 lags). ** 
+
+To test for conditional heteroscedasticity we need to check of the ACF and PACF of the squared residuals:
+
+```{r, echo=FALSE}
+Acf(model$residuals^2)
+pacf(model$residuals^2)
+```
+
+As we can see on the Acf plot it seems there is correlation for at least the first 6 lags. Let use the `ArchTest` which performs the Box-Ljung test at lag n on the auto correlations of the squared series values. Null hypothesis is that there is no correlation at lag n:
+
+```{r, echo=FALSE}
+ArchTest(model$residuals, lag = 6)
+ArchTest(model$residuals, lag = 12)
+```
+
+The p-value for both tests is lower that the significant level (5%) so we reject the null hypothesis and assume there is significant correlation at both lag 6 and 12, thus, there are conditional heteroscedastic effects.
+
+**1.c. If there are conditional heteroscedastic effects, identify a GARCH model for the data and refit the complete model. **
+
+Checking the partial auto correlation plot we see that it cuts off after lag 2 (lag 3 is still significant but it very small so we won't take it into account), thus we are going to fit a GARCH(m=2,s=0) model on top of our previous ARMA(3,2) model. Notice we use all of the coefficients of the ARMA(3,2) model to fit GARCH:
+
+```{r, echo=FALSE}
+fit1 = garchFit(formula = ~arma(3, 2) + garch(2, 0), data, trace = FALSE)
+summary(fit1)
+```
+
+ma2 is insignificant so we remove it and fit again:
+
+```{r, echo=FALSE}
+fit1 = garchFit(formula = ~arma(3, 1) + garch(2, 0), data, trace = FALSE)
+summary(fit1)
+```
+
+ar3 is insignificant so we remove it and fit again:
+
+```{r, echo=FALSE}
+fit1 = garchFit(formula = ~arma(2, 1) + garch(2, 0), data, trace = FALSE)
+summary(fit1)
+```
+
+All the coefficients are significant now. We also see that all the correlation test yield no correlation (p-value over significance level). 
+Let's plot the fitted standard deviation estimates and fitted series values next to the original series to see if it matches:
+
+```{r, echo=FALSE}
+plot(data)
+plot(fit1@sigma.t, type = "l")
+```
+
+The variance is well explained by our model. Let's also check the diagnostic plots (auto correlation of residuals and squared residuals):
+
+```{r, echo=FALSE}
+sres = fit1@residuals/fit1@sigma.t
+Acf(sres)
+Acf(sres^2)
+```
+
+There is only one significant lag with a very low value so we can state that there is no correlation at any lag for the residuals and squared residuals. Let's test it:
+
+```{r, echo=FALSE}
+Box.test(sres, lag = 14,type = "Ljung")
+ArchTest(sres, lag = 19)
+```
+
+The p-value for both test is over significance level so we don't reject null hypothesis and assume there is not correlation as expected.
+
+**1.d. Write down your final fitted model. **
+
+This is the final model:
+
+x(t) = -3.548e-01 x(t-1) + 4.326e-01 x(t-2) + 8.584e-01 a(t-1) + at
+
+a(t)=sigma(t)e(t)
+
+sigma2(t) = 3.190e-01xa2(t-1) + 4.637e-01xa2(t-2)
+
+E(a(t))=0
+
+  
+**2.a. Build a GARCH model for the log returns (see Lecture 1 for definitions of simple and log returns) of GM stock. Justify your choice of model and confirm all assumptions.  ** 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+gmdata=read.table('m-gmsp5003.txt',header=FALSE)
+gm=ts(gmdata$V2,start=c(1950,1),frequency=12)
+#Note that this is the series of simple returns while the problem asks you to use the log returns
+```
+
+We are going to built a GARCH model for the log returns so let's take the log of the returns (`lgm = log(1+gm)`) and plot the data:
+
+```{r, echo=FALSE}
+lgm = log(1+gm)
+plot(lgm)
+```
+
+Let's check if the mean of the series is 0 to see if we need the constant alpha0 in the ARMA model. We'll test null hypothesis mean=0:
+
+
+```{r, echo=FALSE}
+FinTS.stats(lgm)
+z = mean(lgm)/sqrt(var(lgm)/length(lgm))
+pnorm(z, lower.tail = FALSE)
+```
+
+p-value (`0.0008983664`) for mean = 0 is very low so we reject the null hypothesis and conclude that the mean is not 0, thus, we need a constant for our ARMA(p,q) model:
+
+x(t) = alpha0 + alpha1 x(t-1) + ... + alphap x(t-p) + beta1 a(t-1) + ... + betaq a(t-q) + at
+
+Now, we check auto correlation and partial auto correlation plots:
+
+```{r, echo=FALSE}
+Acf(lgm)
+pacf(lgm)
+```
+
+It looks there is correlation at lag 6 and 7. Let's confirm with a Box-Ljung test:
+
+```{r, echo=FALSE}
+Box.test(lgm, lag = 7,type = "Ljung")
+```
+
+The p-value is lower than our significance level so we reject null hypothesis (no correlation) and state that there is correlation at lag 7.
+
+Next, we check the output of `auto.arima` to look for the ARMA model with highest AIC. Knowing that there is correlation at lag 7 we check models with 'p' and 'q' up to 7 (We don't print the output as is several pages long).
+
+After checking the output for `auto.arima` we find that the model with best AIC (`-1626.345`) is **ARMA(p=2,q=6)** [x(t) = alpha0 + alpha1 x(t-1) + alpha2 x(t-2) + beta1 a(t-1) + beta2 a(t-2) + beta3 a(t-3) + beta4 a(t-4) + beta5 a(t-5)  + beta6 a(t-6)+ a(t)]:
+
+```{r, echo=FALSE}
+model = arima(x = lgm, order = c(2, 0, 6))
+model
+```
+
+This model has several coefficients that are not significant but they are not the highest order term so we leave it as it is and proceed with a GARCH model. But first, let's check the diagnostic plots to verify that this ARMA model is a good fit for the data:
+
+```{r, echo=FALSE}
+tsdiag(model)
+```
+
+As we can see there is no correlation in the residuals. On the other hand variance is not constant. It looks like there is a volatility cluster at the end. Let's see if there are conditional heteroscedastic effects checking the correlation of squared residuals:
+
+```{r, echo=FALSE}
+Acf(model$residuals^2)
+pacf(model$residuals^2)
+```
+
+It looks like there is correlation, let's test with the Box-Ljung test at lag n on the auto correlations of the squared residual values. Null hypothesis is that there is no correlation at lag n. We test for lag 3 and 15:
+
+```{r, echo=FALSE}
+ArchTest(model$residuals, lag = 3)
+ArchTest(model$residuals, lag = 15)
+```
+
+The p-value is smaller that the significant level so we reject the null hypothesis, thus, there is correlation.
+
+There is conditional heteroscedastic effects so we are going to use an GARCH(m,s) model. 
+
+We fit a GARCH(m,s) with m = 1 and s = 1 (we have tried several models and this one yields the best AIC):
+
+```{r, echo=FALSE}
+fit1 = garchFit(formula = ~arma(2, 6) + garch(1, 1), lgm, trace = FALSE)
+summary(fit1)
+```
+
+Notice that highest order term ma6 is not significant so we remove it and fit the model again:
+
+```{r, echo=FALSE}
+fit1 = garchFit(formula = ~arma(2, 5) + garch(1, 1), lgm, trace = FALSE)
+summary(fit1)
+```
+
+All the coefficients are significant now. We also see that all the correlation tests yield no correlation (p-value over significance level) which indicates a good fit.
+
+Let's plot the fitted standard deviation estimates and fitted series values next to the original series to see if it matches:
+
+```{r, echo=FALSE}
+plot(lgm)
+plot(fit1@sigma.t, type = "l")
+```
+
+It looks like the variance is well explained by the model. Now we plot the standardized residuals:
+
+```{r, echo=FALSE}
+sres = fit1@residuals/fit1@sigma.t
+plot(sres, type = "l")
+```
+
+Mean looks like 0 and variance constant.
+
+Let's also check the diagnostic plots (auto correlation of residuals and squared residuals):
+
+```{r, echo=FALSE}
+Acf(sres)
+Acf(sres^2)
+```
+
+There is only one significant lag with a very low value so we can state that there is no correlation at any lag for the residuals and squared residuals. We can check doing a Box-Ljung test at lag 12: 
+
+
+```{r, echo=FALSE}
+ArchTest(sres, lag = 12)
+```
+
+As we suspected, there is no correlation (we don't reject the null hypothesis).
+
+**2.b. Write down the fitted model.  **
+
+This is the final model:
+
+x(t) = 1.198e-02 - 5.530e-0 x(t-1) + 4.076e-01 x(t-2) + 6.405e-0 a(t-1) - 4.365e-01 a(t-) - 3.477e-02 a(t-3) - 1.839e-02 a(t-4) - 2.782e-02 a(t-5) + a(t)
+
+a(t)=sigma(t)e(t)
+
+sigma2(t) = 8.701e-02 x a2(t-1) + 8.833e-01 x sigma2(t-1)
+
+E(a(t))=0
+
+
+**2.c. Forecast the log returns for the next three month after the end of the series. **
+
+Let's make and plot the predictions:
+
+```{r, echo=FALSE, warning=FALSE}
+predictions = predict(fit1, 3)
+predictions
+preds = predictions$meanForecast
+se = predictions$meanError
+upl1=preds+2*se
+lpl1=preds-2*se
+plot(lgm,xlim=c(1948,2005),ylim=c(-0.5,0.5), main="Predictions")
+predtime=c(2004.07692308,2004.1538462,2004.2307692)
+points(predtime,preds,col='red',pch=19,cex=.8)
+lines(predtime,upl1,col='blue',lwd=2)
+lines(predtime,lpl1,col='blue',lwd=2)
+#let's zoom in
+plot(lgm,xlim=c(2002,2005),ylim=c(-0.5,0.5), main="Zoom - Predictions")
+predtime=c(2004, 2004.07692308,2004.1538462)
+points(predtime,preds,col='red',pch=19,cex=.8)
+lines(predtime,upl1,col='blue',lwd=2)
+lines(predtime,lpl1,col='blue',lwd=2)
+```
